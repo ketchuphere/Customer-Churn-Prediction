@@ -1,4 +1,4 @@
-#ChurnScope — Customer Churn Prediction
+## ChurnScope — Customer Churn Prediction
 
 Full-stack deep learning app: **React + Vite frontend** connected to a **FastAPI backend** with a trained neural network.
 
