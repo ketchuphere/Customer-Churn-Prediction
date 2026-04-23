@@ -1,6 +1,5 @@
-#  ChurnScope v4 — Notebook Pipeline
+#  ChurnScope v4
 
-Full-stack ML project following the **Analysis.ipynb** pipeline exactly.
 
 ---
 
