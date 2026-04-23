@@ -1,8 +1,17 @@
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-scikit-learn==1.4.2
+# ── ChurnScope — Python 3.11 compatible (tested & pinned) ─────────────────────
+# Backend API
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+python-multipart==0.0.20
+
+# ML core
 numpy==1.26.4
-pandas==2.2.2
-joblib==1.4.0
-pydantic==2.7.1
-python-multipart==0.0.9
+pandas==2.2.3
+scikit-learn==1.6.0
+imbalanced-learn==0.12.4
+joblib==1.4.2
+
+# EDA / visualizations (used by train_model.py)
+matplotlib==3.9.4
+seaborn==0.13.2
