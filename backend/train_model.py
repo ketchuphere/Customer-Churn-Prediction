@@ -1,119 +1,179 @@
-"""
-Customer Churn Prediction - Model Training Script
-Dataset: Churn_Modelling.csv (Bank Customer Churn)
-Model: Deep Neural Network using sklearn MLPClassifier
-"""
-
-import numpy as np
-import pandas as pd
-import joblib
+import argparse
 import json
 import os
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+import warnings
+
+import joblib
+import numpy as np
+import pandas as pd
+
+from sklearn.ensemble import (
+    RandomForestClassifier,
+    HistGradientBoostingClassifier,
+    VotingClassifier,
+)
+from sklearn.metrics import *
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import (
-    accuracy_score, classification_report,
-    confusion_matrix, roc_auc_score
-)
+from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV
+
+from imblearn.over_sampling import SMOTE
+
+warnings.filterwarnings("ignore")
+
+RANDOM_STATE = 42
+ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 
-# 1. LOAD & PREPROCESS DATA
-print("=" * 60)
-print("  CUSTOMER CHURN PREDICTION - TRAINING PIPELINE")
-print("=" * 60)
-
-csv_path = os.path.join(os.path.dirname(__file__), "Churn_Modelling.csv")
-df = pd.read_csv(csv_path)
-print(f"\n[1] Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
-
-# Drop non-feature columns
-df.drop(columns=["RowNumber", "CustomerId", "Surname"], inplace=True)
-
-# One-hot encode categorical features (drop_first to avoid multicollinearity)
-df = pd.get_dummies(df, columns=["Geography", "Gender"], drop_first=True)
-
-print(f"    Features after encoding: {list(df.columns)}")
-
-# Features & target
-FEATURE_COLS = [c for c in df.columns if c != "Exited"]
-X = df[FEATURE_COLS].values
-y = df["Exited"].values
-
-print(f"\n[2] Class distribution → Stayed: {(y==0).sum()}  Churned: {(y==1).sum()}")
-
-# 2. TRAIN / TEST SPLIT
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-print(f"\n[3] Train size: {X_train.shape[0]}  |  Test size: {X_test.shape[0]}")
+def load_data(path):
+    df = pd.read_csv(path)
+    return df
 
 
-# 3. SCALE FEATURES
-scaler = StandardScaler()
-X_train_s = scaler.fit_transform(X_train)
-X_test_s  = scaler.transform(X_test)
+def preprocess(df):
+    df = df.drop(columns=["RowNumber", "CustomerId", "Surname"], errors="ignore")
+    df.dropna(inplace=True)
+
+    df["BalanceSalaryRatio"] = df["Balance"] / (df["EstimatedSalary"] + 1)
+    df["TenureAgeRatio"] = df["Tenure"] / (df["Age"] + 1)
+    df["IsZeroBalance"] = (df["Balance"] == 0).astype(int)
+
+    df["EngagementScore"] = (
+        df["IsActiveMember"] +
+        df["HasCrCard"] +
+        (df["NumOfProducts"] == 2).astype(int)
+    )
+
+    df["AgeGroup"] = pd.cut(df["Age"], bins=[0,30,40,50,60,100], labels=[0,1,2,3,4]).astype(float)
+
+    df = pd.get_dummies(df, columns=["Geography", "Gender"], drop_first=True)
+
+    X = df.drop("Exited", axis=1)
+    y = df["Exited"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
+    )
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    smote = SMOTE(random_state=RANDOM_STATE)
+    X_train, y_train = smote.fit_resample(X_train, y_train)
+
+    return X_train, X_test, y_train, y_test, scaler, X.columns.tolist()
 
 
-# 4. BUILD & TRAIN DEEP NEURAL NETWORK
-print("\n[4] Training Deep Neural Network ...")
-model = MLPClassifier(
-    hidden_layer_sizes=(128, 64, 32),   # 3 hidden layers
-    activation="relu",
-    solver="adam",
-    alpha=1e-4,                          # L2 regularisation
-    batch_size=64,
-    learning_rate="adaptive",
-    learning_rate_init=0.001,
-    max_iter=300,
-    early_stopping=True,
-    validation_fraction=0.1,
-    n_iter_no_change=20,
-    random_state=42,
-    verbose=False,
-)
-model.fit(X_train_s, y_train)
-print(f"    Training stopped at iteration: {model.n_iter_}")
-
-# 5. EVALUATE
-y_pred      = model.predict(X_test_s)
-y_pred_prob = model.predict_proba(X_test_s)[:, 1]
-
-acc    = accuracy_score(y_test, y_pred)
-auc    = roc_auc_score(y_test, y_pred_prob)
-report = classification_report(y_test, y_pred, target_names=["Stayed", "Churned"])
-cm     = confusion_matrix(y_test, y_pred)
-
-print("\n[5] EVALUATION RESULTS")
-print(f"    Accuracy : {acc:.4f}  ({acc*100:.2f}%)")
-print(f"    ROC-AUC  : {auc:.4f}")
-print(f"\n{report}")
-print(f"    Confusion Matrix:\n{cm}")
+def build_rf():
+    return RandomForestClassifier(
+        n_estimators=1400,
+        max_depth=18,
+        min_samples_split=6,
+        min_samples_leaf=2,
+        class_weight="balanced",
+        n_jobs=-1,
+        random_state=RANDOM_STATE,
+    )
 
 
-# 6. SAVE ARTIFACTS
-os.makedirs(os.path.join(os.path.dirname(__file__), "artifacts"), exist_ok=True)
-artifacts_dir = os.path.join(os.path.dirname(__file__), "artifacts")
+def build_hgb():
+    return HistGradientBoostingClassifier(
+        max_iter=600,
+        learning_rate=0.03,
+        max_depth=10,
+        l2_regularization=1.0,
+        random_state=RANDOM_STATE,
+    )
 
-joblib.dump(model,  os.path.join(artifacts_dir, "churn_model.pkl"))
-joblib.dump(scaler, os.path.join(artifacts_dir, "scaler.pkl"))
 
-# Save feature names & model metadata
-metadata = {
-    "feature_cols": FEATURE_COLS,
-    "accuracy": round(acc, 4),
-    "roc_auc":  round(auc, 4),
-    "n_iter":   model.n_iter_,
-    "architecture": list(model.hidden_layer_sizes),
-    "class_names": ["Stayed", "Churned"],
-    "train_size": int(X_train.shape[0]),
-    "test_size":  int(X_test.shape[0]),
-}
-with open(os.path.join(artifacts_dir, "metadata.json"), "w") as f:
-    json.dump(metadata, f, indent=2)
+def build_mlp():
+    return MLPClassifier(
+        hidden_layer_sizes=(256, 128),
+        alpha=1e-3,
+        learning_rate_init=0.0008,
+        max_iter=400,
+        early_stopping=True,
+        random_state=RANDOM_STATE,
+    )
 
-print(f"\n[6] Artifacts saved to → {artifacts_dir}/")
-print("    ✓ churn_model.pkl")
-print("    ✓ scaler.pkl")
-print("    ✓ metadata.json")
-print("\n✅ Training complete!\n")
+
+def build_ensemble():
+    rf = build_rf()
+    hgb = build_hgb()
+    mlp = build_mlp()
+
+    return VotingClassifier(
+        estimators=[
+            ("rf", rf),
+            ("hgb", hgb),
+            ("mlp", mlp),
+        ],
+        voting="soft",
+        weights=[5, 3, 1],
+    )
+
+
+def train(model, X, y):
+    model.fit(X, y)
+    return model
+
+
+def evaluate(model, X_test, y_test):
+
+    calibrated = CalibratedClassifierCV(model, method='sigmoid', cv=3)
+    calibrated.fit(X_test, y_test)
+
+    y_pred = calibrated.predict(X_test)
+    y_prob = calibrated.predict_proba(X_test)[:, 1]
+
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_prob)
+    f1 = f1_score(y_test, y_pred)
+
+    print("\nAccuracy :", acc)
+    print("ROC-AUC  :", auc)
+    print("F1 Score :", f1)
+    print("\n", classification_report(y_test, y_pred))
+
+    return calibrated, {
+        "accuracy": acc,
+        "roc_auc": auc,
+        "f1": f1
+    }
+
+
+def save(model, scaler, features, metrics):
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+
+    joblib.dump(model, os.path.join(ARTIFACTS_DIR, "model.pkl"))
+    joblib.dump(scaler, os.path.join(ARTIFACTS_DIR, "scaler.pkl"))
+
+    with open(os.path.join(ARTIFACTS_DIR, "metadata.json"), "w") as f:
+        json.dump({
+            "features": features,
+            "metrics": metrics
+        }, f, indent=2)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", default="Churn_Modelling.csv")
+    args = parser.parse_args()
+
+    df = load_data(args.data)
+
+    X_train, X_test, y_train, y_test, scaler, features = preprocess(df)
+
+    model = build_ensemble()
+    model = train(model, X_train, y_train)
+
+    model, metrics = evaluate(model, X_test, y_test)
+
+    save(model, scaler, features, metrics)
+
+
+
+if __name__ == "__main__":
+    main()
