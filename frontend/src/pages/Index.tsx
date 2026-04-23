@@ -9,12 +9,15 @@ interface PredictionResult {
   risk_level: string;
   confidence: number;
   key_factors: string[];
+  model_name?: string;
+  model_accuracy?: number;
+  model_roc_auc?: number;
 }
 
 interface RiskDriver {
   label: string;
   detail: string;
-  impact: number;      // 0–100 (visual bar width)
+  impact: number;
   type: "danger" | "warning" | "positive";
   icon: string;
   category: "behaviour" | "financial" | "demographic" | "engagement";
@@ -32,11 +35,10 @@ const riskLabel = (prob: number) => {
   return "High";
 };
 
-// ── Derive structured risk drivers from inputs ────────
 function buildRiskDrivers(
   creditScore: number,
   age: number,
-  geography: string,
+  country: string,
   tenure: number,
   products: number,
   balance: number,
@@ -45,215 +47,146 @@ function buildRiskDrivers(
 ): RiskDriver[] {
   const drivers: RiskDriver[] = [];
 
-  // ── DANGER signals ──
   if (isActive === 0) {
     drivers.push({
       label: "Inactive Account",
       detail: "Customer hasn't engaged with any banking activity recently. Disengaged customers are 3× more likely to churn.",
-      impact: 92,
-      type: "danger",
-      icon: "💤",
-      category: "behaviour",
+      impact: 92, type: "danger", icon: "💤", category: "behaviour",
     });
   }
   if (products >= 3) {
     drivers.push({
       label: `${products} Products Linked`,
-      detail: "Customers with 3+ products often feel overwhelmed or oversold. Paradoxically, this correlates strongly with churn.",
-      impact: 85,
-      type: "danger",
-      icon: "📦",
-      category: "engagement",
+      detail: "Customers with 3+ products often feel oversold. Paradoxically, this correlates strongly with churn.",
+      impact: 85, type: "danger", icon: "📦", category: "engagement",
     });
   }
-  if (geography === "Germany") {
+  if (country === "Germany") {
     drivers.push({
-      label: "Germany Geography",
-      detail: "Customers in Germany show a significantly higher churn rate in our dataset — nearly 2× the baseline.",
-      impact: 72,
-      type: "danger",
-      icon: "🌍",
-      category: "demographic",
+      label: "Germany Region",
+      detail: "Customers in Germany show a significantly higher churn rate — nearly 2× the baseline.",
+      impact: 72, type: "danger", icon: "🌍", category: "demographic",
     });
   }
   if (age > 55) {
     drivers.push({
       label: `Age ${age} — Senior segment`,
-      detail: "Customers above 55 switch banks more frequently, often seeking retirement-focused products competitors offer.",
-      impact: 65,
-      type: "danger",
-      icon: "👤",
-      category: "demographic",
+      detail: "Customers above 55 switch banks more frequently, often seeking retirement-focused products.",
+      impact: 65, type: "danger", icon: "👤", category: "demographic",
     });
   } else if (age > 45) {
     drivers.push({
-      label: `Age ${age} — Elevated risk bracket`,
+      label: `Age ${age} — Elevated risk`,
       detail: "The 45–55 age group shows above-average churn — often reassessing financial relationships mid-career.",
-      impact: 48,
-      type: "warning",
-      icon: "👤",
-      category: "demographic",
+      impact: 48, type: "warning", icon: "👤", category: "demographic",
     });
   }
   if (creditScore < 450) {
     drivers.push({
       label: `Credit Score ${creditScore} — Very Low`,
       detail: "A very low credit score suggests financial stress. Customers under pressure often consolidate to fewer banks.",
-      impact: 78,
-      type: "danger",
-      icon: "📉",
-      category: "financial",
+      impact: 78, type: "danger", icon: "📉", category: "financial",
     });
   } else if (creditScore < 580) {
     drivers.push({
       label: `Credit Score ${creditScore} — Below Average`,
-      detail: "Below-average credit score is a moderate churn signal — financial instability can lead to account closure.",
-      impact: 50,
-      type: "warning",
-      icon: "📉",
-      category: "financial",
+      detail: "Below-average credit is a moderate churn signal — financial instability can lead to account closure.",
+      impact: 50, type: "warning", icon: "📉", category: "financial",
     });
   }
   if (balance > 150000) {
     drivers.push({
       label: `High Balance €${balance.toLocaleString()}`,
-      detail: "Very high-balance customers are often targeted by premium wealth management competitors, increasing poaching risk.",
-      impact: 68,
-      type: "warning",
-      icon: "💰",
-      category: "financial",
+      detail: "Very high-balance customers are often targeted by premium wealth management competitors.",
+      impact: 68, type: "warning", icon: "💰", category: "financial",
     });
   } else if (balance > 100000) {
     drivers.push({
       label: `Elevated Balance €${balance.toLocaleString()}`,
       detail: "Customers with large balances attract competitor offers. Without personalised service, they tend to leave.",
-      impact: 52,
-      type: "warning",
-      icon: "💰",
-      category: "financial",
+      impact: 52, type: "warning", icon: "💰", category: "financial",
     });
   }
   if (tenure <= 1) {
     drivers.push({
       label: tenure === 0 ? "Brand New Customer" : "Only 1 Year Tenure",
       detail: "New customers have not yet built loyalty. The first 1–2 years are the highest churn-risk window.",
-      impact: 60,
-      type: "warning",
-      icon: "🆕",
-      category: "behaviour",
-    });
-  }
-
-  // ── POSITIVE / protective signals ──
-  if (isActive === 1 && tenure >= 5) {
-    drivers.push({
-      label: "Long-term Active Member",
-      detail: `${tenure} years of active engagement is a strong loyalty signal. Long-tenure active customers churn at <10%.`,
-      impact: 88,
-      type: "positive",
-      icon: "🏆",
-      category: "behaviour",
-    });
-  } else if (isActive === 1) {
-    drivers.push({
-      label: "Active Account",
-      detail: "Regular account activity is one of the strongest predictors of retention. This customer is engaged.",
-      impact: 70,
-      type: "positive",
-      icon: "✅",
-      category: "behaviour",
-    });
-  }
-  if (tenure >= 7) {
-    drivers.push({
-      label: `${tenure}-Year Customer`,
-      detail: "Long tenure means deeply embedded banking habits. Switching costs are high — this customer is likely sticky.",
-      impact: 80,
-      type: "positive",
-      icon: "📅",
-      category: "behaviour",
-    });
-  } else if (tenure >= 4 && tenure < 7) {
-    drivers.push({
-      label: `${tenure} Years of Tenure`,
-      detail: "Solid tenure. This customer has stayed through multiple product cycles — a positive retention signal.",
-      impact: 55,
-      type: "positive",
-      icon: "📅",
-      category: "behaviour",
-    });
-  }
-  if (creditScore >= 750) {
-    drivers.push({
-      label: `Credit Score ${creditScore} — Excellent`,
-      detail: "High credit score indicates financial stability. Stable customers are less likely to churn impulsively.",
-      impact: 72,
-      type: "positive",
-      icon: "⭐",
-      category: "financial",
-    });
-  } else if (creditScore >= 650) {
-    drivers.push({
-      label: `Credit Score ${creditScore} — Good`,
-      detail: "Good credit score suggests financial health — a mild protective factor against churn.",
-      impact: 45,
-      type: "positive",
-      icon: "⭐",
-      category: "financial",
-    });
-  }
-  if (products === 2) {
-    drivers.push({
-      label: "2 Products — Optimal Mix",
-      detail: "Two products is the sweet spot. It creates cross-sell stickiness without overwhelming the customer.",
-      impact: 65,
-      type: "positive",
-      icon: "🎯",
-      category: "engagement",
-    });
-  }
-  if (geography === "Spain") {
-    drivers.push({
-      label: "Spain — Low Churn Region",
-      detail: "Spanish customers in our dataset show consistently lower churn rates compared to Germany or France.",
-      impact: 50,
-      type: "positive",
-      icon: "🌍",
-      category: "demographic",
+      impact: 60, type: "warning", icon: "🆕", category: "behaviour",
     });
   }
   if (balance === 0) {
     drivers.push({
       label: "Zero Balance Account",
       detail: "Zero balance may indicate this is a secondary account. Low financial commitment can precede closure.",
-      impact: 42,
-      type: "warning",
-      icon: "⚠️",
-      category: "financial",
+      impact: 42, type: "warning", icon: "⚠️", category: "financial",
     });
   }
 
-  // Sort: danger first, then warning, then positive
+  if (isActive === 1 && tenure >= 5) {
+    drivers.push({
+      label: "Long-term Active Member",
+      detail: `${tenure} years of active engagement is a strong loyalty signal. Long-tenure active customers churn at <10%.`,
+      impact: 88, type: "positive", icon: "🏆", category: "behaviour",
+    });
+  } else if (isActive === 1) {
+    drivers.push({
+      label: "Active Account",
+      detail: "Regular activity is one of the strongest predictors of retention.",
+      impact: 70, type: "positive", icon: "✅", category: "behaviour",
+    });
+  }
+  if (tenure >= 7) {
+    drivers.push({
+      label: `${tenure}-Year Customer`,
+      detail: "Long tenure means deeply embedded banking habits. Switching costs are high — this customer is sticky.",
+      impact: 80, type: "positive", icon: "📅", category: "behaviour",
+    });
+  } else if (tenure >= 4 && tenure < 7) {
+    drivers.push({
+      label: `${tenure} Years of Tenure`,
+      detail: "Solid tenure. This customer has stayed through multiple product cycles — a positive retention signal.",
+      impact: 55, type: "positive", icon: "📅", category: "behaviour",
+    });
+  }
+  if (creditScore >= 750) {
+    drivers.push({
+      label: `Credit Score ${creditScore} — Excellent`,
+      detail: "High credit score indicates financial stability. Stable customers are less likely to churn impulsively.",
+      impact: 72, type: "positive", icon: "⭐", category: "financial",
+    });
+  } else if (creditScore >= 650) {
+    drivers.push({
+      label: `Credit Score ${creditScore} — Good`,
+      detail: "Good credit score suggests financial health — a mild protective factor against churn.",
+      impact: 45, type: "positive", icon: "⭐", category: "financial",
+    });
+  }
+  if (products === 2) {
+    drivers.push({
+      label: "2 Products — Optimal Mix",
+      detail: "Two products is the sweet spot. It creates cross-sell stickiness without overwhelming the customer.",
+      impact: 65, type: "positive", icon: "🎯", category: "engagement",
+    });
+  }
+  if (country === "Spain") {
+    drivers.push({
+      label: "Spain — Low Churn Region",
+      detail: "Spanish customers in our dataset show consistently lower churn rates.",
+      impact: 50, type: "positive", icon: "🌍", category: "demographic",
+    });
+  }
+
   const order = { danger: 0, warning: 1, positive: 2 };
   drivers.sort((a, b) => order[a.type] - order[b.type]);
-
   return drivers;
 }
 
 const categoryLabel: Record<string, string> = {
-  behaviour:   "Behaviour",
-  financial:   "Financial",
-  demographic: "Demographic",
-  engagement:  "Engagement",
+  behaviour: "Behaviour", financial: "Financial",
+  demographic: "Demographic", engagement: "Engagement",
 };
 
-// ── Components ────────────────────────────────────────
-
-function PillToggle({
-  options,
-  value,
-  onChange,
-}: {
+function PillToggle({ options, value, onChange }: {
   options: { label: string; value: string | number }[];
   value: string | number;
   onChange: (v: string | number) => void;
@@ -261,15 +194,12 @@ function PillToggle({
   return (
     <div className="flex rounded-lg bg-secondary p-1 gap-1">
       {options.map((o) => (
-        <button
-          key={String(o.value)}
-          onClick={() => onChange(o.value)}
+        <button key={String(o.value)} onClick={() => onChange(o.value)}
           className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
             value === o.value
               ? "bg-primary text-primary-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
+          }`}>
           {o.label}
         </button>
       ))}
@@ -277,10 +207,9 @@ function PillToggle({
   );
 }
 
-function RangeSlider({
-  label, min, max, step, value, onChange,
-}: {
-  label: string; min: number; max: number; step?: number; value: number; onChange: (v: number) => void;
+function RangeSlider({ label, min, max, step, value, onChange }: {
+  label: string; min: number; max: number; step?: number;
+  value: number; onChange: (v: number) => void;
 }) {
   return (
     <div className="space-y-2">
@@ -288,10 +217,8 @@ function RangeSlider({
         <label className="text-sm font-medium text-foreground">{label}</label>
         <span className="font-mono-display text-sm font-bold text-primary">{value}</span>
       </div>
-      <input
-        type="range" min={min} max={max} step={step || 1} value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
+      <input type="range" min={min} max={max} step={step || 1} value={value}
+        onChange={(e) => onChange(Number(e.target.value))} />
     </div>
   );
 }
@@ -334,27 +261,18 @@ function RiskBar({ probability }: { probability: number }) {
   );
 }
 
-// ── NEW: Risk Driver Card ─────────────────────────────
 function DriverCard({ driver, index }: { driver: RiskDriver; index: number }) {
   const [expanded, setExpanded] = useState(false);
-
   const colors = {
     danger:   { bg: "hsl(0,72%,51%,0.08)",   border: "hsl(0,72%,51%,0.25)",   bar: "hsl(0,72%,51%)",   badge: "hsl(0,72%,51%,0.12)",   text: "hsl(0,72%,40%)" },
     warning:  { bg: "hsl(38,92%,50%,0.08)",  border: "hsl(38,92%,50%,0.25)",  bar: "hsl(38,92%,50%)",  badge: "hsl(38,92%,50%,0.12)",  text: "hsl(38,72%,35%)" },
     positive: { bg: "hsl(152,60%,42%,0.08)", border: "hsl(152,60%,42%,0.25)", bar: "hsl(152,60%,42%)", badge: "hsl(152,60%,42%,0.12)", text: "hsl(152,60%,30%)" },
   };
   const c = colors[driver.type];
-
   return (
-    <div
-      className="rounded-xl border p-3.5 cursor-pointer transition-all duration-200 hover:shadow-md"
-      style={{
-        background: c.bg, borderColor: c.border,
-        animationDelay: `${index * 60}ms`,
-      }}
-      onClick={() => setExpanded(!expanded)}
-    >
-      {/* Header row */}
+    <div className="rounded-xl border p-3.5 cursor-pointer transition-all duration-200 hover:shadow-md"
+      style={{ background: c.bg, borderColor: c.border, animationDelay: `${index * 60}ms` }}
+      onClick={() => setExpanded(!expanded)}>
       <div className="flex items-center gap-3">
         <span className="text-xl shrink-0">{driver.icon}</span>
         <div className="flex-1 min-w-0">
@@ -368,22 +286,16 @@ function DriverCard({ driver, index }: { driver: RiskDriver; index: number }) {
               <span className="text-muted-foreground text-xs">{expanded ? "▲" : "▼"}</span>
             </div>
           </div>
-          {/* Impact bar */}
           <div className="flex items-center gap-2">
             <div className="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all duration-700"
-                style={{ width: `${driver.impact}%`, background: c.bar }}
-              />
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${driver.impact}%`, background: c.bar }} />
             </div>
-            <span className="text-xs font-mono-display font-bold shrink-0" style={{ color: c.text, minWidth: "36px" }}>
-              {driver.impact}%
-            </span>
+            <span className="text-xs font-mono-display font-bold shrink-0"
+              style={{ color: c.text, minWidth: "36px" }}>{driver.impact}%</span>
           </div>
         </div>
       </div>
-
-      {/* Expanded detail */}
       {expanded && (
         <p className="mt-3 text-sm leading-relaxed pl-9" style={{ color: c.text }}>
           {driver.detail}
@@ -393,41 +305,34 @@ function DriverCard({ driver, index }: { driver: RiskDriver; index: number }) {
   );
 }
 
-// ── NEW: Risk Breakdown Panel ─────────────────────────
 function RiskBreakdown({ drivers, prob }: { drivers: RiskDriver[]; prob: number }) {
   const danger   = drivers.filter(d => d.type === "danger");
   const warnings = drivers.filter(d => d.type === "warning");
   const positive = drivers.filter(d => d.type === "positive");
 
   const summaryText = () => {
-    if (prob >= 0.65) {
-      return `This customer is at HIGH risk. ${danger.length > 0 ? `The primary concern${danger.length > 1 ? "s are" : " is"} ${danger.slice(0,2).map(d=>d.label.toLowerCase()).join(" and ")}.` : ""} Immediate retention action is recommended.`;
-    }
-    if (prob >= 0.3) {
-      return `This customer shows MEDIUM risk. There are ${warnings.length + danger.length} concerning signal${warnings.length + danger.length !== 1 ? "s" : ""} but also ${positive.length} protective factor${positive.length !== 1 ? "s" : ""}. Monitor closely.`;
-    }
-    return `This customer is at LOW risk. ${positive.length} strong retention signal${positive.length !== 1 ? "s are" : " is"} present. Continue regular engagement to maintain loyalty.`;
+    if (prob >= 0.65) return `HIGH risk detected. ${danger.length > 0 ? `Primary concern${danger.length > 1 ? "s" : ""}: ${danger.slice(0,2).map(d=>d.label).join(", ")}.` : ""} Immediate retention action is recommended.`;
+    if (prob >= 0.3)  return `MEDIUM risk. ${warnings.length + danger.length} concern signal${(warnings.length+danger.length)!==1?"s":""} but ${positive.length} protective factor${positive.length!==1?"s":""}. Monitor closely.`;
+    return `LOW risk. ${positive.length} strong retention signal${positive.length!==1?"s":""} present. Continue standard engagement.`;
   };
 
   return (
     <div className="space-y-4 mt-5">
-      {/* Summary banner */}
-      <div className="rounded-xl p-4 border"
-        style={{
-          background: prob >= 0.65 ? "hsl(0,72%,51%,0.07)" : prob >= 0.3 ? "hsl(38,92%,50%,0.07)" : "hsl(152,60%,42%,0.07)",
-          borderColor: prob >= 0.65 ? "hsl(0,72%,51%,0.2)" : prob >= 0.3 ? "hsl(38,92%,50%,0.2)" : "hsl(152,60%,42%,0.2)",
-        }}>
-        <p className="text-xs font-semibold uppercase tracking-wider mb-1"
-          style={{ color: riskColor(prob) }}>Why is the risk {riskLabel(prob)}?</p>
+      <div className="rounded-xl p-4 border" style={{
+        background:   prob >= 0.65 ? "hsl(0,72%,51%,0.07)"   : prob >= 0.3 ? "hsl(38,92%,50%,0.07)"   : "hsl(152,60%,42%,0.07)",
+        borderColor:  prob >= 0.65 ? "hsl(0,72%,51%,0.2)"    : prob >= 0.3 ? "hsl(38,92%,50%,0.2)"    : "hsl(152,60%,42%,0.2)",
+      }}>
+        <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: riskColor(prob) }}>
+          Why is the risk {riskLabel(prob)}?
+        </p>
         <p className="text-sm text-foreground/80 leading-relaxed">{summaryText()}</p>
       </div>
 
-      {/* Score tally */}
       <div className="grid grid-cols-3 gap-2 text-center">
         {[
-          { label: "Risk Factors",      count: danger.length,   color: "hsl(0,72%,51%)",   bg: "hsl(0,72%,51%,0.08)" },
-          { label: "Caution Signals",   count: warnings.length, color: "hsl(38,92%,50%)",  bg: "hsl(38,92%,50%,0.08)" },
-          { label: "Protective Factors",count: positive.length, color: "hsl(152,60%,42%)", bg: "hsl(152,60%,42%,0.08)" },
+          { label: "Risk Factors",       count: danger.length,   color: "hsl(0,72%,51%)",   bg: "hsl(0,72%,51%,0.08)"   },
+          { label: "Caution Signals",    count: warnings.length, color: "hsl(38,92%,50%)",  bg: "hsl(38,92%,50%,0.08)"  },
+          { label: "Protective Factors", count: positive.length, color: "hsl(152,60%,42%)", bg: "hsl(152,60%,42%,0.08)" },
         ].map(s => (
           <div key={s.label} className="rounded-lg p-2.5" style={{ background: s.bg }}>
             <div className="text-2xl font-bold font-mono-display" style={{ color: s.color }}>{s.count}</div>
@@ -436,63 +341,51 @@ function RiskBreakdown({ drivers, prob }: { drivers: RiskDriver[]; prob: number 
         ))}
       </div>
 
-      {/* Driver cards — danger + warning first */}
       {(danger.length > 0 || warnings.length > 0) && (
         <div>
-          <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mb-2">
-            ⚠️ What's driving the risk up
-          </p>
+          <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mb-2">⚠️ What's driving the risk up</p>
           <div className="space-y-2">
-            {[...danger, ...warnings].map((d, i) => (
-              <DriverCard key={d.label} driver={d} index={i} />
-            ))}
+            {[...danger, ...warnings].map((d, i) => <DriverCard key={d.label} driver={d} index={i} />)}
           </div>
         </div>
       )}
 
-      {/* Protective factors */}
       {positive.length > 0 && (
         <div>
-          <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mb-2">
-            ✅ What's keeping the customer
-          </p>
+          <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mb-2">✅ What's keeping the customer</p>
           <div className="space-y-2">
-            {positive.map((d, i) => (
-              <DriverCard key={d.label} driver={d} index={i} />
-            ))}
+            {positive.map((d, i) => <DriverCard key={d.label} driver={d} index={i} />)}
           </div>
         </div>
       )}
 
-      {/* Retention tip */}
       <div className="rounded-xl border border-border bg-secondary p-4">
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">💡 Recommended Action</p>
         <p className="text-sm text-foreground/80 leading-relaxed">
           {prob >= 0.65
             ? "Schedule an immediate outreach call. Consider a personalised retention offer — fee waiver, loyalty reward, or premium upgrade. Re-engagement within 7 days significantly reduces churn probability."
             : prob >= 0.3
-            ? "Enrol this customer in a proactive nurture sequence. A personalised check-in email or product recommendation in the next 30 days can tip them toward staying."
-            : "Keep up regular engagement. Customers at low risk still benefit from occasional personalised touchpoints — product updates, rewards milestones, or a simple satisfaction survey."}
+            ? "Enrol in a proactive nurture sequence. A personalised check-in email or product recommendation in the next 30 days can tip them toward staying."
+            : "Keep up regular engagement. Customers at low risk still benefit from occasional personalised touchpoints — product updates, rewards milestones, or a satisfaction survey."}
         </p>
       </div>
     </div>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────
 const ChurnScope = () => {
   const { toast } = useToast();
 
-  const [creditScore, setCreditScore] = useState(619);
-  const [age, setAge]                 = useState(42);
-  const [geography, setGeography]     = useState("France");
-  const [gender, setGender]           = useState("Female");
-  const [tenure, setTenure]           = useState(2);
-  const [products, setProducts]       = useState(1);
-  const [balance, setBalance]         = useState(0);
-  const [salary, setSalary]           = useState(101349);
-  const [hasCreditCard, setHasCreditCard] = useState(1);
-  const [isActive, setIsActive]       = useState(1);
+  const [creditScore, setCreditScore]     = useState(619);
+  const [age, setAge]                     = useState(42);
+  const [country, setCountry]             = useState("France");
+  const [gender, setGender]               = useState("Female");
+  const [tenure, setTenure]               = useState(2);
+  const [productsNumber, setProductsNumber] = useState(1);
+  const [balance, setBalance]             = useState(0);
+  const [salary, setSalary]               = useState(101349);
+  const [creditCard, setCreditCard]       = useState(1);
+  const [activeMember, setActiveMember]   = useState(1);
 
   const [result, setResult]       = useState<PredictionResult | null>(null);
   const [drivers, setDrivers]     = useState<RiskDriver[]>([]);
@@ -506,40 +399,47 @@ const ChurnScope = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          credit_score: creditScore, geography, gender, age, tenure,
-          balance, num_of_products: products,
-          has_cr_card: hasCreditCard, is_active_member: isActive,
+          credit_score:     creditScore,
+          country,
+          gender,
+          age,
+          tenure,
+          balance,
+          products_number:  productsNumber,
+          credit_card:      creditCard,
+          active_member:    activeMember,
           estimated_salary: salary,
         }),
       });
-      if (!res.ok) throw new Error("API error");
+      if (!res.ok) throw new Error(`API error ${res.status}`);
       const data: PredictionResult = await res.json();
       setResult(data);
-      setDrivers(buildRiskDrivers(creditScore, age, geography, tenure, products, balance, isActive, data.churn_probability));
+      setDrivers(buildRiskDrivers(creditScore, age, country, tenure, productsNumber, balance, activeMember, data.churn_probability));
       setShowResult(true);
     } catch {
       toast({ title: "Connection Issue", description: "Could not reach the API. Showing demo prediction.", variant: "destructive" });
       const demoProb = Math.random() * 0.8 + 0.05;
-      const demoResult = {
+      setResult({
         churn_probability: demoProb,
         prediction: demoProb > 0.5 ? "Churn" : "Stay",
         risk_level: riskLabel(demoProb),
-        confidence: 1 - demoProb,
-        key_factors: ["Active member with long tenure — loyal customer", "Low account balance may indicate disengagement"],
-      };
-      setResult(demoResult);
-      setDrivers(buildRiskDrivers(creditScore, age, geography, tenure, products, balance, isActive, demoProb));
+        confidence: 1 - Math.abs(demoProb - 0.5) * 2,
+        key_factors: [],
+        model_name: "Demo",
+        model_accuracy: 0.87,
+        model_roc_auc: 0.92,
+      });
+      setDrivers(buildRiskDrivers(creditScore, age, country, tenure, productsNumber, balance, activeMember, demoProb));
       setShowResult(true);
     } finally {
       setLoading(false);
     }
-  }, [creditScore, age, geography, gender, tenure, products, balance, salary, hasCreditCard, isActive, toast]);
+  }, [creditScore, age, country, gender, tenure, productsNumber, balance, salary, creditCard, activeMember, toast]);
 
   const prob = result?.churn_probability ?? 0;
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="sticky top-0 z-50 bg-card/80 backdrop-blur-lg border-b border-border">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -548,36 +448,44 @@ const ChurnScope = () => {
               Churn<span className="text-primary">Scope</span>
             </span>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-success/10">
-            <span className="w-1.5 h-1.5 rounded-full bg-success" />
-            <span className="text-xs font-medium text-success">Online</span>
+          <div className="flex items-center gap-3">
+            {result && (
+              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-secondary text-xs font-mono text-muted-foreground">
+                <span>{result.model_name ?? "Ensemble"}</span>
+                <span className="opacity-50">|</span>
+                <span>acc {((result.model_accuracy ?? 0) * 100).toFixed(1)}%</span>
+                <span className="opacity-50">|</span>
+                <span>auc {result.model_roc_auc?.toFixed(3)}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-success/10">
+              <span className="w-1.5 h-1.5 rounded-full bg-success" />
+              <span className="text-xs font-medium text-success">Online</span>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Hero */}
       <section className="text-center pt-10 pb-6 px-4 animate-fade-in-up" style={{ animationDelay: "0.05s" }}>
         <h1 className="text-2xl sm:text-4xl font-bold text-foreground leading-tight">
           Customer Churn Prediction
         </h1>
         <p className="mt-2 text-muted-foreground text-sm sm:text-base max-w-md mx-auto">
-          Enter customer details and instantly predict churn risk with detailed reasoning.
+          sklearn Pipeline · ColumnTransformer · VotingEnsemble · SMOTE
         </p>
       </section>
 
-      {/* Main Grid */}
       <main className="max-w-6xl mx-auto px-4 sm:px-6 pb-16 grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        {/* ── Form ── */}
         <div className="bg-card rounded-xl border border-border p-6 shadow-sm animate-fade-in-up" style={{ animationDelay: "0.1s" }}>
           <h2 className="text-base font-semibold text-foreground mb-5">Customer Profile</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <RangeSlider label="Credit Score"   min={300} max={900} value={creditScore} onChange={setCreditScore} />
-            <RangeSlider label="Age"            min={18}  max={92}  value={age}         onChange={setAge} />
+            <RangeSlider label="Credit Score"    min={300} max={900} value={creditScore}    onChange={setCreditScore} />
+            <RangeSlider label="Age"             min={18}  max={92}  value={age}            onChange={setAge} />
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Geography</label>
-              <select value={geography} onChange={(e) => setGeography(e.target.value)}
+              <label className="text-sm font-medium text-foreground">Country</label>
+              <select value={country} onChange={e => setCountry(e.target.value)}
                 className="w-full bg-secondary text-foreground rounded-lg px-3 py-2.5 text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary/40">
                 <option value="France">🇫🇷 France</option>
                 <option value="Germany">🇩🇪 Germany</option>
@@ -587,37 +495,37 @@ const ChurnScope = () => {
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Gender</label>
-              <PillToggle options={[{ label: "Male", value: "Male" }, { label: "Female", value: "Female" }]}
-                value={gender} onChange={(v) => setGender(String(v))} />
+              <PillToggle options={[{ label:"Male", value:"Male" },{ label:"Female", value:"Female" }]}
+                value={gender} onChange={v => setGender(String(v))} />
             </div>
 
-            <RangeSlider label="Tenure (years)"  min={0} max={10} value={tenure}   onChange={setTenure} />
-            <RangeSlider label="Products Count"  min={1} max={4}  value={products} onChange={setProducts} />
+            <RangeSlider label="Tenure (years)"  min={0} max={10} value={tenure}         onChange={setTenure} />
+            <RangeSlider label="Products Number" min={1} max={4}  value={productsNumber} onChange={setProductsNumber} />
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Account Balance (€)</label>
-              <input type="number" value={balance} onChange={(e) => setBalance(Number(e.target.value))}
+              <input type="number" value={balance} onChange={e => setBalance(Number(e.target.value))}
                 className="w-full bg-secondary text-foreground rounded-lg px-3 py-2.5 text-sm font-mono-display border border-border focus:outline-none focus:ring-2 focus:ring-primary/40"
                 placeholder="0.00" />
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Estimated Salary (€/yr)</label>
-              <input type="number" value={salary} onChange={(e) => setSalary(Number(e.target.value))}
+              <input type="number" value={salary} onChange={e => setSalary(Number(e.target.value))}
                 className="w-full bg-secondary text-foreground rounded-lg px-3 py-2.5 text-sm font-mono-display border border-border focus:outline-none focus:ring-2 focus:ring-primary/40"
                 placeholder="0.00" />
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Has Credit Card</label>
-              <PillToggle options={[{ label: "Yes", value: 1 }, { label: "No", value: 0 }]}
-                value={hasCreditCard} onChange={(v) => setHasCreditCard(Number(v))} />
+              <PillToggle options={[{ label:"Yes", value:1 },{ label:"No", value:0 }]}
+                value={creditCard} onChange={v => setCreditCard(Number(v))} />
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Active Member</label>
-              <PillToggle options={[{ label: "Active", value: 1 }, { label: "Inactive", value: 0 }]}
-                value={isActive} onChange={(v) => setIsActive(Number(v))} />
+              <PillToggle options={[{ label:"Active", value:1 },{ label:"Inactive", value:0 }]}
+                value={activeMember} onChange={v => setActiveMember(Number(v))} />
             </div>
           </div>
 
@@ -629,30 +537,25 @@ const ChurnScope = () => {
           </button>
         </div>
 
-        {/* ── Result ── */}
         <div className="flex flex-col gap-6">
           {showResult && result ? (
             <div className="bg-card rounded-xl border border-border p-6 shadow-sm animate-fade-in-up overflow-y-auto" style={{ maxHeight: "90vh" }}>
               <h2 className="text-base font-semibold text-foreground mb-4">Prediction Result</h2>
-
               <SemiCircleGauge value={prob} />
 
-              {/* Verdict pill */}
               <div className="mt-4 flex justify-center">
                 <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold"
                   style={{
                     background: prob < 0.5 ? "hsl(152,60%,42%,0.1)" : "hsl(0,72%,51%,0.1)",
-                    color: prob < 0.5 ? "hsl(152,60%,42%)" : "hsl(0,72%,51%)",
+                    color:      prob < 0.5 ? "hsl(152,60%,42%)"     : "hsl(0,72%,51%)",
                   }}>
                   {prob < 0.5 ? "✅" : "⚠️"}{" "}
                   {prob < 0.5 ? "Low Churn Risk" : "High Churn Risk"} — {(prob * 100).toFixed(1)}%
                 </div>
               </div>
 
-              {/* Risk bar */}
               <div className="mt-6"><RiskBar probability={prob} /></div>
 
-              {/* Stats row */}
               <div className="grid grid-cols-2 gap-3 mt-5">
                 <div className="bg-secondary rounded-lg p-3.5 text-center">
                   <p className="text-xs text-muted-foreground mb-0.5">Confidence</p>
@@ -668,7 +571,6 @@ const ChurnScope = () => {
                 </div>
               </div>
 
-              {/* ── Risk Breakdown ── */}
               <RiskBreakdown drivers={drivers} prob={prob} />
             </div>
           ) : (
