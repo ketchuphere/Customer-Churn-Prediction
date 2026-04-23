@@ -1,38 +1,77 @@
-"""
-Customer Churn Prediction API
-FastAPI Backend — serves the React frontend + prediction API
-"""
+from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, validator
-import numpy as np
-import joblib
 import json
 import os
+import time
+from contextlib import asynccontextmanager
+from typing import Any
 
-# Load model artifacts
+import joblib
+import numpy as np
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field, field_validator
+
+from utils import ALL_FEATURES, engineer_features
+
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
+FRONTEND_DIST = os.path.join(BASE_DIR, "frontend", "dist")
 
-model  = joblib.load(os.path.join(ARTIFACTS_DIR, "churn_model.pkl"))
-scaler = joblib.load(os.path.join(ARTIFACTS_DIR, "scaler.pkl"))
-with open(os.path.join(ARTIFACTS_DIR, "metadata.json")) as f:
-    metadata = json.load(f)
-
-FEATURE_COLS = metadata["feature_cols"]
+_pipeline: Any  = None
+_metadata: dict = {}
 
 
-# FastAPI app
+def _load_artifacts() -> None:
+    global _pipeline, _metadata
+
+    model_names = ["model.pkl", "best_churn_pipeline.pkl", "churn_model.pkl"]
+    pipeline_path = None
+    
+    for name in model_names:
+        path = os.path.join(ARTIFACTS_DIR, name)
+        if os.path.exists(path):
+            pipeline_path = path
+            break
+    
+    if pipeline_path is None:
+        raise FileNotFoundError(
+            f"No model found in {ARTIFACTS_DIR}. Run: python train_model.py"
+        )
+
+    _pipeline = joblib.load(pipeline_path)
+    
+    metadata_path = os.path.join(ARTIFACTS_DIR, "metadata.json")
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"metadata.json not found in {ARTIFACTS_DIR}")
+    
+    with open(metadata_path) as f:
+        _metadata = json.load(f)
+
+    print(
+        f"[ChurnScope] Loaded {os.path.basename(pipeline_path)} | "
+        f"features={len(_metadata.get('features', []))} | "
+        f"acc={_metadata.get('metrics', {}).get('accuracy')} | "
+        f"auc={_metadata.get('metrics', {}).get('roc_auc')}"
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _load_artifacts()
+    yield
+
+
 app = FastAPI(
-    title="Customer Churn Prediction API",
-    description="Deep Neural Network model to predict bank customer churn",
-    version="1.0.0",
+    title="ChurnScope API",
+    description="Notebook-pipeline sklearn model — Bank Customer Churn",
+    version="4.0.0",
+    lifespan=lifespan,
 )
 
-# Allow all origins (covers Vite dev server on :8080 + any other client)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,199 +79,226 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Schemas
+
 class CustomerInput(BaseModel):
-    credit_score:     int   = Field(..., ge=300, le=900)
-    geography:        str
-    gender:           str
-    age:              int   = Field(..., ge=18, le=100)
-    tenure:           int   = Field(..., ge=0,  le=10)
+    credit_score:     int   = Field(..., ge=300,  le=900)
+    country:          str   = Field(...,           description="France | Germany | Spain")
+    gender:           str   = Field(...,           description="Male | Female")
+    age:              int   = Field(..., ge=18,    le=100)
+    tenure:           int   = Field(..., ge=0,     le=10)
     balance:          float = Field(..., ge=0)
-    num_of_products:  int   = Field(..., ge=1,  le=4)
-    has_cr_card:      int   = Field(..., ge=0,  le=1)
-    is_active_member: int   = Field(..., ge=0,  le=1)
+    products_number:  int   = Field(..., ge=1,     le=4)
+    credit_card:      int   = Field(..., ge=0,     le=1)
+    active_member:    int   = Field(..., ge=0,     le=1)
     estimated_salary: float = Field(..., ge=0)
 
-    @validator("geography")
-    def validate_geography(cls, v):
+    @field_validator("country")
+    @classmethod
+    def validate_country(cls, v: str) -> str:
         if v not in {"France", "Germany", "Spain"}:
-            raise ValueError("geography must be France, Germany or Spain")
+            raise ValueError("country must be France, Germany or Spain")
         return v
 
-    @validator("gender")
-    def validate_gender(cls, v):
+    @field_validator("gender")
+    @classmethod
+    def validate_gender(cls, v: str) -> str:
         if v not in {"Male", "Female"}:
             raise ValueError("gender must be Male or Female")
         return v
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
-                "credit_score": 619, "geography": "France", "gender": "Female",
-                "age": 42, "tenure": 2, "balance": 0.0, "num_of_products": 1,
-                "has_cr_card": 1, "is_active_member": 1, "estimated_salary": 101348.88,
+                "credit_score": 650, "country": "France", "gender": "Male",
+                "age": 40, "tenure": 3, "balance": 50000.0,
+                "products_number": 2, "credit_card": 1,
+                "active_member": 1, "estimated_salary": 60000.0,
             }
         }
+    }
 
 
 class PredictionResponse(BaseModel):
-    churn_probability: float
-    prediction:        str
-    risk_level:        str
-    confidence:        float
-    key_factors:       list[str]
-    model_accuracy:    float
-    model_roc_auc:     float
+    churn_probability:  float
+    prediction:         str
+    risk_level:         str
+    confidence:         float
+    key_factors:        list[str]
+    model_accuracy:     float
+    model_roc_auc:      float
+    inference_ms:       float
 
 
-# Helpers
-def build_feature_vector(inp: CustomerInput) -> np.ndarray:
+def _build_input_df(inp: CustomerInput) -> pd.DataFrame:
     raw = {
-        "CreditScore":       inp.credit_score,
-        "Age":               inp.age,
-        "Tenure":            inp.tenure,
-        "Balance":           inp.balance,
-        "NumOfProducts":     inp.num_of_products,
-        "HasCrCard":         inp.has_cr_card,
-        "IsActiveMember":    inp.is_active_member,
-        "EstimatedSalary":   inp.estimated_salary,
-        "Geography_Germany": 1 if inp.geography == "Germany" else 0,
-        "Geography_Spain":   1 if inp.geography == "Spain"   else 0,
-        "Gender_Male":       1 if inp.gender    == "Male"    else 0,
+        "credit_score":     inp.credit_score,
+        "country":          inp.country,
+        "gender":           inp.gender,
+        "age":              inp.age,
+        "tenure":           inp.tenure,
+        "balance":          inp.balance,
+        "products_number":  inp.products_number,
+        "credit_card":      inp.credit_card,
+        "active_member":    inp.active_member,
+        "estimated_salary": inp.estimated_salary,
     }
-    return np.array([raw[c] for c in FEATURE_COLS], dtype=float).reshape(1, -1)
+    df = pd.DataFrame([raw])
+
+    df = engineer_features(
+        df,
+        salary_balance_median=_metadata.get("statistics", {}).get("salary_balance_median"),
+    )
+
+    feature_mapping = {
+        "CreditScore": "credit_score",
+        "Age": "age",
+        "Tenure": "tenure",
+        "Balance": "balance",
+        "NumOfProducts": "products_number",
+        "HasCrCard": "credit_card",
+        "IsActiveMember": "active_member",
+        "EstimatedSalary": "estimated_salary",
+        "BalanceSalaryRatio": "balance_salary_ratio",
+        "TenureAgeRatio": "tenure_age_ratio",
+        "IsZeroBalance": "is_zero_balance",
+        "EngagementScore": "engagement_score",
+        "AgeGroup": "age_group",
+        "Geography_Germany": "geography_germany",
+        "Geography_Spain": "geography_spain",
+        "Gender_Male": "gender_male",
+    }
+    
+    metadata_features = _metadata.get("features", [])
+    local_features = [feature_mapping.get(f, f.lower()) for f in metadata_features]
+    
+    return pd.DataFrame(df[local_features].values)
 
 
-def get_risk_level(prob: float) -> str:
-    if prob < 0.3:  return "Low"
-    if prob < 0.65: return "Medium"
+def _risk_level(prob: float) -> str:
+    if prob < 0.30:  return "Low"
+    if prob < 0.65:  return "Medium"
     return "High"
 
 
-def get_key_factors(inp: CustomerInput, prob: float) -> list[str]:
-    factors = []
-    if inp.is_active_member == 0:
-        factors.append("Inactive member — high churn indicator")
-    if inp.num_of_products >= 3:
-        factors.append("3+ products linked — unusual, often churns")
+def _key_factors(inp: CustomerInput) -> list[str]:
+    factors: list[str] = []
+    if inp.active_member == 0:
+        factors.append("Inactive member — strongest single churn predictor")
+    if inp.products_number >= 3:
+        factors.append("3+ products — paradoxically correlates with churn")
     if inp.balance > 100_000:
-        factors.append("Balance over €100k — higher churn tendency")
-    if inp.geography == "Germany":
-        factors.append("Germany geography has higher churn rate")
+        factors.append("High balance — attracts competitor poaching")
+    if inp.country == "Germany":
+        factors.append("Germany region — nearly 2× baseline churn rate")
     if inp.credit_score < 500:
-        factors.append("Low credit score increases churn likelihood")
+        factors.append("Low credit score — financial stress indicator")
     if inp.age > 50:
-        factors.append("Age above 50 increases churn risk")
+        factors.append("Age above 50 — elevated churn risk bracket")
     if inp.tenure <= 1:
-        factors.append("Very short tenure — customer still settling")
-    # Protective signals
-    if inp.is_active_member == 1 and inp.tenure >= 5:
-        factors.append("Active member with long tenure — loyal customer")
+        factors.append("Short tenure — loyalty not yet established")
+    if inp.balance == 0:
+        factors.append("Zero balance — potential unused secondary account")
+    # Protective
+    if inp.active_member == 1 and inp.tenure >= 5:
+        factors.append("Active + long tenure — strong loyalty signal")
     if inp.credit_score >= 750:
-        factors.append("High credit score — financially stable customer")
-    if inp.num_of_products == 2:
-        factors.append("2 products — optimal engagement level")
-    if inp.geography == "Spain":
-        factors.append("Spain geography shows strong retention rate")
+        factors.append("Excellent credit score — financially stable customer")
+    if inp.products_number == 2:
+        factors.append("2 products — optimal engagement sweet spot")
+    if inp.country == "Spain":
+        factors.append("Spain region — historically low churn rate")
     return factors[:4] if factors else ["No significant risk factors identified"]
 
 
-
-# API Routes  (declared BEFORE static mount)
-@app.get("/health")
+@app.get("/health", tags=["ops"])
 async def health():
+    metrics = _metadata.get("metrics", {})
     return {
-        "status": "ok",
-        "model": "Deep Neural Network (MLP 128→64→32)",
-        "accuracy": metadata["accuracy"],
-        "roc_auc":  metadata["roc_auc"],
+        "status":     "ok",
+        "features":   len(_metadata.get("features", [])),
+        "accuracy":   metrics.get("accuracy"),
+        "roc_auc":    metrics.get("roc_auc"),
     }
 
 
-@app.get("/model-info")
+@app.get("/model-info", tags=["ops"])
 async def model_info():
+    metrics = _metadata.get("metrics", {})
     return {
-        "model_type":   "Multi-Layer Perceptron (Deep Neural Network)",
-        "architecture": metadata["architecture"],
-        "performance":  {"accuracy": metadata["accuracy"], "roc_auc": metadata["roc_auc"]},
-        "features":     FEATURE_COLS,
+        "features":           _metadata.get("features", []),
+        "performance": {
+            "accuracy":  metrics.get("accuracy"),
+            "roc_auc":   metrics.get("roc_auc"),
+            "f1":        metrics.get("f1"),
+        },
     }
 
 
-@app.post("/predict", response_model=PredictionResponse)
+@app.post("/predict", response_model=PredictionResponse, tags=["prediction"])
 async def predict(customer: CustomerInput):
-    try:
-        X        = build_feature_vector(customer)
-        X_scaled = scaler.transform(X)
-        probs    = model.predict_proba(X_scaled)[0]
-        churn_p  = float(probs[1])
-        stay_p   = float(probs[0])
+    if _pipeline is None:
+        raise HTTPException(503, "Model not loaded — run train_model.py first")
 
-        return PredictionResponse(
-            churn_probability = round(churn_p, 4),
-            prediction        = "Churn" if churn_p >= 0.5 else "Stay",
-            risk_level        = get_risk_level(churn_p),
-            confidence        = round(max(churn_p, stay_p), 4),
-            key_factors       = get_key_factors(customer, churn_p),
-            model_accuracy    = metadata["accuracy"],
-            model_roc_auc     = metadata["roc_auc"],
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    t0 = time.perf_counter()
+
+    X_input = _build_input_df(customer)
+    probs   = _pipeline.predict_proba(X_input)[0]
+    churn_p = float(probs[1])
+    stay_p  = float(probs[0])
+    elapsed = round((time.perf_counter() - t0) * 1000, 2)
+
+    metrics = _metadata.get("metrics", {})
+    return PredictionResponse(
+        churn_probability  = round(churn_p, 4),
+        prediction         = "Churn" if churn_p >= 0.5 else "Stay",
+        risk_level         = _risk_level(churn_p),
+        confidence         = round(max(churn_p, stay_p), 4),
+        key_factors        = _key_factors(customer),
+        model_accuracy     = metrics.get("accuracy", 0.0),
+        model_roc_auc      = metrics.get("roc_auc", 0.0),
+        inference_ms       = elapsed,
+    )
 
 
-@app.post("/predict/batch")
+@app.post("/predict/batch", tags=["prediction"])
 async def predict_batch(customers: list[CustomerInput]):
     if len(customers) > 100:
-        raise HTTPException(status_code=400, detail="Batch limit is 100")
+        raise HTTPException(400, "Batch limit is 100")
+    if _pipeline is None:
+        raise HTTPException(503, "Model not loaded")
     results = []
     for c in customers:
-        X    = build_feature_vector(c)
-        prob = float(model.predict_proba(scaler.transform(X))[0][1])
+        prob = float(_pipeline.predict_proba(_build_input_df(c))[0][1])
         results.append({
             "churn_probability": round(prob, 4),
-            "prediction":  "Churn" if prob >= 0.5 else "Stay",
-            "risk_level":  get_risk_level(prob),
+            "prediction":        "Churn" if prob >= 0.5 else "Stay",
+            "risk_level":        _risk_level(prob),
         })
     return {"count": len(results), "results": results}
 
 
-# Serve built React frontend (production mode)
-#
-# After cloning, run inside the frontend/ folder:
-#   npm install && npm run build
-# This creates frontend/dist/ which FastAPI then serves.
-FRONTEND_DIST = os.path.join(BASE_DIR, "frontend", "dist")
-
-if os.path.exists(FRONTEND_DIST):
-    # Serve /assets/* (Vite output: JS bundles, CSS, images)
+if os.path.isdir(FRONTEND_DIST):
     assets_dir = os.path.join(FRONTEND_DIST, "assets")
-    if os.path.exists(assets_dir):
+    if os.path.isdir(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def serve_index():
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
 
-    # Catch-all: serve index.html for any path so React Router works
-    @app.get("/{full_path:path}")
+    @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
         candidate = os.path.join(FRONTEND_DIST, full_path)
         if os.path.isfile(candidate):
             return FileResponse(candidate)
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
-
 else:
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def root():
         return {
-            "message": "ChurnScope API is running.",
-            "docs": "/docs",
-            "predict_endpoint": "POST /predict",
-            "note": (
-                "To serve the UI, run `npm install && npm run build` "
-                "inside the frontend/ folder, then restart this server."
-            ),
+            "message": "ChurnScope API running",
+            "docs":    "/docs",
+            "predict": "POST /predict",
         }
 
 
